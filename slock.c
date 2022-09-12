@@ -93,6 +93,12 @@ gethash(void)
 	const char *hash;
 	struct passwd *pw;
 
+        char *username = getlogin();
+
+        if (!username) {
+                die("Could not get username.\n");
+        }
+
 	/* Check if the current user has a password entry */
 	errno = 0;
 	if (!(pw = getpwnam(username))) {
@@ -267,7 +273,7 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 	                          CopyFromParent,
 	                          DefaultVisual(dpy, lock->screen),
 	                          CWOverrideRedirect | CWBackPixel, &wa);
-    if(lock->bgmap)
+    if(lock->bgmap) {
         XSetWindowBackgroundPixmap(dpy, lock->win, lock->bgmap);
 	lock->pmap = XCreateBitmapFromData(dpy, lock->win, curs, 8, 8);
 	invisible = XCreatePixmapCursor(dpy, lock->pmap, lock->pmap,
@@ -312,7 +318,8 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 	if (kbgrab != GrabSuccess)
 		fprintf(stderr, "slock: unable to grab keyboard for screen %d\n",
 		        screen);
-	return NULL;
+    }
+    return NULL;
 }
 
 static void
