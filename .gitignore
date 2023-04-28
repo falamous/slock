@@ -1,4 +1,5 @@
 slock
+config.h
 
 # Prerequisites
 *.d

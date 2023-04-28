@@ -2,8 +2,6 @@
 static const char *user  = "nobody";
 static const char *group = "nobody";
 
-/* username for authentication */
-
 static const char *colorname[NUMCOLS] = {
 	[INIT] =   "black",     /* after initialization */
 	[INPUT] =  "#005577",   /* during input */
@@ -21,3 +19,11 @@ static const int blurRadius=5;
 #define PIXELATION
 /*Set pixelation radius*/
 static const int pixelSize=40;
+
+
+/* text color */
+static const char * text_color = "#D0D0D0";
+
+/* text size (must be a valid size) */
+/* static const char * font_name = "Courier Prime Code:pixelsize=22:antialias=true:autohint=true"; */
+static const char * font_name = "Courier Prime Code:pixelsize=50";

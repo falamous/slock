@@ -14,16 +14,23 @@
 #include <string.h>
 #include <unistd.h>
 #include <sys/types.h>
+#include <sys/wait.h>
 #include <X11/extensions/Xrandr.h>
+#include <X11/extensions/Xinerama.h>
 #include <X11/keysym.h>
+#include <X11/XKBlib.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <X11/Xft/Xft.h>
 #include <Imlib2.h>
 
 #include "arg.h"
 #include "util.h"
 
 char *argv0;
+
+/* global count to prevent repeated error messages */
+int count_error = 0;
 
 enum {
 	INIT,
@@ -87,21 +94,135 @@ dontkillme(void)
 }
 #endif
 
+void
+writemessage(Display *dpy, Window win, int screen, const char *message)
+{
+
+
+  XftFont *font;
+
+	XftDraw *d;
+
+  Colormap cmap;
+  Visual *visual = NULL;
+
+  XWindowAttributes wattr;
+
+  XftColor color;
+
+  visual = DefaultVisual(dpy, screen);
+  cmap = DefaultColormap(dpy, screen);
+
+  font = XftFontOpenName(dpy, screen, font_name);
+  if (!font) {
+    font = XftFontOpenName(dpy, screen, "fixed");
+    if (!font) {
+      fprintf(stderr, "slock: could not allocate font %s\n", font_name);
+      return;
+    }
+  }
+	if (!message)
+		return;
+
+  if (!XftColorAllocName(dpy, visual, cmap, text_color, &color))
+		die("slock: cannot allocate color '%s'\n", text_color);
+
+  XGetWindowAttributes(dpy, win, &wattr);
+
+	d = XftDrawCreate(dpy, win, visual, cmap);
+	XftDrawStringUtf8(d, &color, font,
+      wattr.width / 20, wattr.height / 20, 
+      (XftChar8 *) message, strlen(message));
+	XftDrawDestroy(d);  
+}
+
+static void
+writekbdsymbol(Display *dpy, Window win, int screen)
+{
+  char buf[64];
+
+  XkbStateRec state;
+  XkbDescPtr description;
+
+  char *symbol;
+  char *start;
+  char *stop;
+  char *stop_tmp;
+  size_t len, i, index;
+  int skip;
+  const char *non_symbols[] = {
+    "capslock",
+    "pc",
+    "inet",
+    "group",
+    "terminate",
+    "compose",
+    "keypad"
+  };
+
+  description = XkbGetMap(dpy, XkbAllComponentsMask, XkbUseCoreKbd);
+  XkbGetState(dpy, XkbUseCoreKbd, &state);
+  XkbGetNames(dpy, XkbSymbolsNameMask, description);
+
+  symbol = XGetAtomName(dpy, description->names->symbols);
+  for(start = symbol, index = 0; start; start = stop) {
+
+    if (*start == '+') { start++; }
+
+    stop = strchr(start, '+');
+    if (stop) {
+      len = stop - start;
+    } else {
+      len = strlen(start);
+    }
+
+    stop_tmp = strchr(start, ':');
+    if (stop_tmp) {
+      if (stop_tmp - start < len) {
+        len = stop_tmp - start;
+      }
+    }
+
+    skip = 0;
+    for(i = 0; i < sizeof(non_symbols)/sizeof(*non_symbols); i++) {
+      if (!strncmp(start, non_symbols[i], len)) {
+        skip = 1;
+        break;
+      }
+    }
+
+    if (skip) {
+      continue;
+    }
+
+    if (index == state.group) {
+      if (len > sizeof(buf) - 1) {
+        len = sizeof(buf) - 1;
+      }
+      memcpy(buf, start, len);
+      buf[len] = '\0';
+      break;
+    }
+    index++;
+    if (stop) { stop++; }
+  }
+
+  writemessage(dpy, win, screen, buf);
+  XFree(symbol);
+  XkbFreeKeyboard(description, 0, 1);
+}
+
+
+
 static const char *
 gethash(void)
 {
 	const char *hash;
 	struct passwd *pw;
 
-        char *username = getlogin();
-
-        if (!username) {
-                die("Could not get username.\n");
-        }
-
 	/* Check if the current user has a password entry */
 	errno = 0;
-	if (!(pw = getpwnam(username))) {
+	if (!(pw = getpwuid(getuid()))) {
 		if (errno)
 			die("slock: getpwuid: %s\n", strerror(errno));
 		else
@@ -153,8 +274,14 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 	while (running && !XNextEvent(dpy, &ev)) {
 		if (ev.type == KeyPress) {
 			explicit_bzero(&buf, sizeof(buf));
-			num = XLookupString(&ev.xkey, buf, sizeof(buf), &ksym, 0);
-			if (IsKeypadKey(ksym)) {
+      num = XLookupString(&ev.xkey, buf, sizeof(buf), &ksym, 0);
+      if (num == 0) {
+        for (screen = 0; screen < nscreens; screen++) {
+          XClearWindow(dpy, locks[screen]->win);
+          writekbdsymbol(dpy, locks[screen]->win, screen);
+        }
+      }
+      if (IsKeypadKey(ksym)) {
 				if (ksym == XK_KP_Enter)
 					ksym = XK_Return;
 				else if (ksym >= XK_KP_0 && ksym <= XK_KP_9)
@@ -204,7 +331,6 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
                         XSetWindowBackgroundPixmap(dpy, locks[screen]->win, locks[screen]->bgmap);
                     else
                         XSetWindowBackground(dpy, locks[screen]->win, locks[screen]->colors[0]);
-					XClearWindow(dpy, locks[screen]->win);
 				}
 				oldc = color;
 			}
@@ -275,6 +401,7 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 	                          CWOverrideRedirect | CWBackPixel, &wa);
     if(lock->bgmap) {
         XSetWindowBackgroundPixmap(dpy, lock->win, lock->bgmap);
+    }
 	lock->pmap = XCreateBitmapFromData(dpy, lock->win, curs, 8, 8);
 	invisible = XCreatePixmapCursor(dpy, lock->pmap, lock->pmap,
 	                                &color, &color, 0, 0);
@@ -318,14 +445,13 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 	if (kbgrab != GrabSuccess)
 		fprintf(stderr, "slock: unable to grab keyboard for screen %d\n",
 		        screen);
-    }
-    return NULL;
+	return NULL;
 }
 
 static void
 usage(void)
 {
-	die("usage: slock [-v] [cmd [arg ...]]\n");
+	die("usage: slock [-v] [-f] [cmd [arg ...]]\n");
 }
 
 int
@@ -338,11 +464,21 @@ main(int argc, char **argv) {
 	gid_t dgid;
 	const char *hash;
 	Display *dpy;
-	int s, nlocks, nscreens;
+	int i, s, nlocks, nscreens;
+	int count_fonts;
+	char **font_names;
 
 	ARGBEGIN {
 	case 'v':
 		fprintf(stderr, "slock-"VERSION"\n");
+		return 0;
+	case 'f':
+		if (!(dpy = XOpenDisplay(NULL)))
+			die("slock: cannot open display\n");
+		font_names = XListFonts(dpy, "*", 10000 /* list 10000 fonts*/, &count_fonts);
+		for (i=0; i<count_fonts; i++) {
+			fprintf(stderr, "%s\n", *(font_names+i));
+		}
 		return 0;
 	default:
 		usage();
@@ -442,10 +578,12 @@ main(int argc, char **argv) {
 	if (!(locks = calloc(nscreens, sizeof(struct lock *))))
 		die("slock: out of memory\n");
 	for (nlocks = 0, s = 0; s < nscreens; s++) {
-		if ((locks[s] = lockscreen(dpy, &rr, s)) != NULL)
+		if ((locks[s] = lockscreen(dpy, &rr, s)) != NULL) {
+			writekbdsymbol(dpy, locks[s]->win, s);
 			nlocks++;
-		else
+		} else {
 			break;
+		}
 	}
 	XSync(dpy, 0);
 
