@@ -1,6 +1,9 @@
 slock
 config.h
 
+# Editor dotfiles
+.*
+
 # Prerequisites
 *.d
 
